@@ -16,11 +16,12 @@ import json
 import serial
 
 parser = argparse.ArgumentParser(description="analyzes the I2C bus sniffer output of an RTC M41T81")
-parser.add_argument('--version', action='version', version='%(prog)s 0.1.3')
+parser.add_argument('--version', action='version', version='%(prog)s 0.1.4')
 parser.add_argument("-f", "--filename", required=False, help="input filename, in text format.")
 parser.add_argument("-o", "--output", required=False, help="output filename, in json format (i2c_rtc.json).")
 parser.add_argument("-p", "--port", required=False, help="serial com port (win = COMxxx, linux = ttyXXXX)")
 parser.add_argument("-b", "--baudrate", help="serial transfer rate (def = 230400)", default="230400")
+parser.add_argument("-t", "--read_timeout", type=int, help="serial read timeout in mS (def = 10000)", default=10000)
 
 args = parser.parse_args()
 
@@ -69,7 +70,7 @@ def parse_file(filename):
 def parse_serial_com(port, baudrate):
     device = None
     try:
-        device = serial.Serial(port, baudrate, 8, 'N', 1, timeout=1)
+        device = serial.Serial(port, baudrate, 8, 'N', 1, timeout=args.read_timeout/1000)
     except:
         print("error can't open the serial port: {}".format(port))
 
