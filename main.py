@@ -16,12 +16,13 @@ import json
 import serial
 
 parser = argparse.ArgumentParser(description="analyzes the I2C bus sniffer output of an RTC M41T81")
-parser.add_argument('--version', action='version', version='%(prog)s 0.1.4')
+parser.add_argument('--version', action='version', version='%(prog)s 0.1.5')
 parser.add_argument("-f", "--filename", required=False, help="input filename, in text format.")
 parser.add_argument("-o", "--output", required=False, help="output filename, in json format (i2c_rtc.json).")
 parser.add_argument("-p", "--port", required=False, help="serial com port (win = COMxxx, linux = ttyXXXX)")
 parser.add_argument("-b", "--baudrate", help="serial transfer rate (def = 230400)", default="230400")
 parser.add_argument("-t", "--read_timeout", type=int, help="serial read timeout in mS (def = 10000)", default=10000)
+parser.add_argument("-r", "--raw_filename", help="save the capture to a text file (raw_filename.txt)")
 
 args = parser.parse_args()
 
@@ -67,6 +68,16 @@ def parse_file(filename):
         print("error file not found")
 
 
+def save_raw(filename, line):
+    if filename is not None:
+        try:
+            with open(filename, "a") as f:
+                f.write(line)
+                f.close
+        except FileNotFoundError:
+            print("error can't write raw file")
+
+
 def parse_serial_com(port, baudrate):
     device = None
     try:
@@ -81,6 +92,7 @@ def parse_serial_com(port, baudrate):
                 if line:
                     if parse_record(line.decode('utf-8')):
                         save_json(args.output)
+                    save_raw(args.raw_filename, line.decode('utf-8'))
             except serial.SerialException as e:
                 print("error reading serial port")
 
