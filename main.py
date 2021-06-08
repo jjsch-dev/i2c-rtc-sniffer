@@ -14,9 +14,10 @@
 import argparse
 import json
 import serial
+from datetime import datetime
 
 parser = argparse.ArgumentParser(description="analyzes the I2C bus sniffer output of an RTC M41T81")
-parser.add_argument('--version', action='version', version='%(prog)s 0.1.7')
+parser.add_argument('--version', action='version', version='%(prog)s 0.1.8')
 parser.add_argument("-f", "--filename", required=False, help="input filename, in text format.")
 parser.add_argument("-o", "--output", required=False, help="output filename, in json format (i2c_rtc.json).")
 parser.add_argument("-p", "--port", required=False, help="serial com port (win = COMxxx, linux = ttyXXXX)")
@@ -29,17 +30,65 @@ args = parser.parse_args()
 records = 0
 datetime_errors = []
 halttime_errors = []
+dt_last = None
+datetime_invalid = []
+datetime_out_sequence = []
+error_fmt_numeric = False
 
+
+def check_datetime(year, month, day, hour, minute, seconds):
+    global dt_last, datetime_invalid, datetime_out_sequence, records, error_fmt_numeric
+
+    error = ""
+    str_log = "mark:{} year:{} "\
+              "month:{} day:{} hour:{} "\
+              "minute:{} seconds: {}".format(records,
+                                             year,
+                                             month,
+                                             day,
+                                             hour,
+                                             minute,
+                                             seconds)
+    try:
+        dt = datetime(year=int(year), month=int(month),
+                      day=int(day), hour=int(hour),
+                      minute=int(minute), second=int(seconds))
+        if dt_last is None:
+            dt_last = dt
+        elif dt < dt_last:
+            datetime_out_sequence.append(str_log)
+            error = '2' if error_fmt_numeric else "dt_sequence"
+        dt_last = dt
+    except ValueError:
+        datetime_invalid.append(str_log)
+        error = '3' if error_fmt_numeric else "dt_invalid"
+
+    return error
+
+
+def dt_to_int(val):
+    try:
+        return int(val)
+    except:
+        return -1
 
 def update_error_counter(data, line):
     global records, datetime_errors, halttime_errors
-    if data["status"] != "empty" and data["status"] != "ok":
+    if data["status"] != "empty" and data["status"] != "ok" and data["status"] != "device unknow":
 
         str_log = "{} {} {}".format(records, line.strip(), data["status"])
         if data["word"] == "00":
             datetime_errors.append(str_log)
         elif data["word"] == "0C":
             halttime_errors.append(str_log)
+
+    if data["status"] == "ok" and data["word"] == "00":
+        check_datetime(year=dt_to_int(data["year"]),
+                       month=dt_to_int(data["month"]),
+                       day=dt_to_int(data["day"]),
+                       hour=dt_to_int(data["hour"]),
+                       minute=dt_to_int(data["minute"]),
+                       seconds=dt_to_int(data["seconds"]))
 
     records = records + 1
 
@@ -158,10 +207,24 @@ def parse_raw_file(filename):
         for item in halttime_errors:
             print(item)
 
-    print("\nfrom {} records, {} have invalid datetime, "
-          "{} invalid halt time".format(records,
+    if len(datetime_invalid):
+        print("\ninvalid datetime\n")
+        for item in datetime_invalid:
+            print(item)
+
+    if len(datetime_out_sequence):
+        print("\ndatetime out of sequence\n")
+        for item in datetime_out_sequence:
+            print(item)
+
+    print("\nfrom {} records, {} have error in frame datetime, "
+          "{} error in frame halt time, "
+          "{} have invalid datetime, "
+          "{} dates are out of sequence".format(records,
                                         len(datetime_errors),
-                                        len(halttime_errors)))
+                                        len(halttime_errors),
+                                        len(datetime_invalid),
+                                        len(datetime_out_sequence)))
 
 
 def save_raw(filename, line):
