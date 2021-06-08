@@ -30,16 +30,18 @@ args = parser.parse_args()
 records = 0
 datetime_errors = []
 halttime_errors = []
-dt_last = None
+dt_last = datetime.min
 datetime_invalid = []
 datetime_out_sequence = []
-error_fmt_numeric = False
 
 
+# Although the decoded date and time comply with the i2c protocol, it can contain
+# out-of-range values, for example, months greater than 12 and days greater than 31.
+# This routine first verifies that the date is valid and then that it is greater
+# than the previous.
 def check_datetime(year, month, day, hour, minute, seconds):
-    global dt_last, datetime_invalid, datetime_out_sequence, records, error_fmt_numeric
+    global dt_last, datetime_invalid, datetime_out_sequence, records
 
-    error = ""
     str_log = "mark:{} year:{} "\
               "month:{} day:{} hour:{} "\
               "minute:{} seconds: {}".format(records,
@@ -50,30 +52,29 @@ def check_datetime(year, month, day, hour, minute, seconds):
                                              minute,
                                              seconds)
     try:
-        dt = datetime(year=int(year), month=int(month),
-                      day=int(day), hour=int(hour),
-                      minute=int(minute), second=int(seconds))
-        if dt_last is None:
-            dt_last = dt
-        elif dt < dt_last:
+        dt = datetime(year=(2000 + year), month=month, day=day,
+                      hour=hour, minute=minute, second=seconds)
+        if dt < dt_last:
             datetime_out_sequence.append(str_log)
-            error = '2' if error_fmt_numeric else "dt_sequence"
         dt_last = dt
     except ValueError:
         datetime_invalid.append(str_log)
-        error = '3' if error_fmt_numeric else "dt_invalid"
-
-    return error
 
 
+# It converts the digits of the date and time to an integer, and when
+# it detects invalid characters it indicates it with -1.
 def dt_to_int(val):
     try:
         return int(val)
     except:
         return -1
 
+
+# The i2c frame is verified: date and alarm record, and also the validity of
+# the date and if it is incremental.
 def update_error_counter(data, line):
     global records, datetime_errors, halttime_errors
+    # The record counters are only updated when the line contains a valid i2c frame.
     if data["status"] != "empty" and data["status"] != "ok" and data["status"] != "device unknow":
 
         str_log = "{} {} {}".format(records, line.strip(), data["status"])
@@ -93,12 +94,19 @@ def update_error_counter(data, line):
     records = records + 1
 
 
+# Updates the output console with the processing information from the i2c frame.
 def show_record(data, line):
     if data["status"] != "empty" and data["status"] != "device unknow":
         line = line.strip()
         if data["word"] == "00":
-            print("{}:{}:{}:{} {}/{}/{} {}".format(data["hour"], data["minute"], data["seconds"], data["tenths"],
-                                                   data["day"], data["month"], data["year"], data["status"]))
+            print("{}:{}:{}:{} {}/{}/{} {}".format(data["hour"],
+                                                   data["minute"],
+                                                   data["seconds"],
+                                                   data["tenths"],
+                                                   data["day"],
+                                                   data["month"],
+                                                   data["year"],
+                                                   data["status"]))
         elif data["word"] == "0C":
             if data["status"] != "ok":
                 print("{} {}".format(line, data["status"]))
@@ -106,6 +114,8 @@ def show_record(data, line):
             print("{}".format(line))
 
 
+# Converts the alarm control register that is in string hexadecimal format
+# to an integer. Returns 0xFF when it contains invalid characters.
 def get_alarm_register(field):
     try:
         field = field.split("n")
@@ -116,6 +126,10 @@ def get_alarm_register(field):
     return val
 
 
+# Verify that the register (byte read) contains valid information,
+# between 0 and 255, and may contain an 'n' or 'p' to indicate the stop
+# condition and the nak.
+# Returns the character '.' to indicate empty value.
 def get_val(registers, index):
     try:
         return registers[index]
@@ -123,6 +137,7 @@ def get_val(registers, index):
         return "."
 
 
+# The i2c frames must end with a NAK before the stop condition.
 def is_nack_stop(register, index):
     val = get_val(register, index)
     try:
@@ -183,6 +198,14 @@ def parse_record(line):
     return json_data
 
 
+# Processes i2c frames stored in a text file that has the following format:
+# sD0a0CasD1a11np
+# sD0a00asD1a16a39a09a16a03a08a06a21a80np
+# sD0a0CasD1a11np
+# sD0a00asD1a22a39a09a16a03a08a06a21a80np
+# ....
+# When finished, it displays the i2c frame analysis result and the validity
+# of the date and time.
 def parse_raw_file(filename):
     global records, datetime_errors, halttime_errors
     try:
@@ -227,6 +250,12 @@ def parse_raw_file(filename):
                                         len(datetime_out_sequence)))
 
 
+# Save i2c frames stored to a text file with the the following format:
+# sD0a0CasD1a11np
+# sD0a00asD1a16a39a09a16a03a08a06a21a80np
+# sD0a0CasD1a11np
+# sD0a00asD1a22a39a09a16a03a08a06a21a80np
+# ....
 def save_raw(filename, line):
     if filename is not None:
         try:
@@ -240,6 +269,12 @@ def save_raw(filename, line):
             print("error can't write raw file")
 
 
+# It opens a serial port and waits for lines from the i2c frames that have the following format:
+# sD0a0CasD1a11np
+# sD0a00asD1a16a39a09a16a03a08a06a21a80np
+# sD0a0CasD1a11np
+# sD0a00asD1a22a39a09a16a03a08a06a21a80np
+# ....
 def parse_serial_com(port, baudrate):
     device = None
     try:
@@ -261,6 +296,9 @@ def parse_serial_com(port, baudrate):
                 print("error reading serial port")
 
 
+# Save the i2c frame processing in json format:
+# {"slave": "D0", "word": "00", "year": "21", "month": "06", "day": "04",
+# "hour": "19", "minute": "19", "seconds": "51", "tenths": "80", "status": "ok"},
 def save_json(file_name, data):
     if data["status"] == "empty" or data["status"] == "device unknow":
         return
