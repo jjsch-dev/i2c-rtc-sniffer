@@ -16,7 +16,7 @@ import json
 import serial
 
 parser = argparse.ArgumentParser(description="analyzes the I2C bus sniffer output of an RTC M41T81")
-parser.add_argument('--version', action='version', version='%(prog)s 0.1.5')
+parser.add_argument('--version', action='version', version='%(prog)s 0.1.6')
 parser.add_argument("-f", "--filename", required=False, help="input filename, in text format.")
 parser.add_argument("-o", "--output", required=False, help="output filename, in json format (i2c_rtc.json).")
 parser.add_argument("-p", "--port", required=False, help="serial com port (win = COMxxx, linux = ttyXXXX)")
@@ -26,44 +26,100 @@ parser.add_argument("-r", "--raw_filename", help="save the capture to a text fil
 
 args = parser.parse_args()
 
-json_data = []
+
+def show_record(data, line):
+    line = line.strip()
+    if data["word"] == "00":
+        print("{}:{}:{}:{} {}/{}/{} {}".format(data["hour"], data["minute"], data["seconds"], data["tenths"],
+                                               data["day"], data["month"], data["year"], data["status"]))
+    elif data["word"] == "0C":
+        if data["status"] != "ok":
+            print("{} {}".format(line, data["status"]))
+    else:
+        print("{}".format(line))
+
+
+def get_alarm_register(field):
+    try:
+        field = field.split("n")
+        val = int(field[0], 16)
+    except:
+        val = 0xFF
+
+    return val
+
+
+def get_val(registers, index):
+    try:
+        return registers[index]
+    except:
+        return "."
+
+
+def is_nack_stop(register, index):
+    val = get_val(register, index)
+    try:
+        return val[-2] == 'n' and val[-1] == 'p'
+    except:
+        return False
+
 
 # Analyze the records sent by the tracker finished in LF CR.
 # Returns False when there are no valid characters.
 def parse_record(line):
-    global json_data
     line = line.strip()  # remove leading/trailing white spaces
+    ack = x = line.split("a")
 
+    json_data = {}
     # The date and time of the RTC is obtained with the following procedure:
     # First write to the I2C address of the device (D0), the address of the RTC register pointer to zero.
     # And then it reads with D1 (1 indicates reading) the nine 8-bit registers that contain the date and
     # time, and in its 9 bits it sends ack, and ends with nak.
-    if len(line) == 39:
-        x = line.split("a")
-        if len(x) == 12 and x[0] == "sD0" and x[2] == "sD1":
-            json_data.append("{{year:{}, month:{}, day:{}, hour:{}, "
-                             "minute:{}, seconds:{}, tenths:{}, status:\'ok\'}}".format(x[10], x[9], x[8],
-                                                                                        x[6], x[5], x[4], x[3]))
-            print("{}:{}:{}:{} {}/{}/{} ok".format(x[6], x[5], x[4], x[3],
-                                                   x[8], x[9], x[10]))
+    if get_val(ack, 0) == "sD0":
+        json_data["slave"] = "D0"
+        if get_val(ack, 1) == "00":
+            json_data["word"] = "00"
+            if get_val(ack, 2) == "sD1":
+                json_data["year"] = get_val(ack, 10)
+                json_data["month"] = get_val(ack, 9)
+                json_data["day"] = get_val(ack, 8)
+                json_data["hour"] = get_val(ack, 6)
+                json_data["minute"] = get_val(ack, 5)
+                json_data["seconds"] = get_val(ack, 4)
+                json_data["tenths"] = get_val(ack, 3)
+
+                json_data["status"] = "ok" if is_nack_stop(ack, 11) else "nack-stop"
+            else:
+                json_data["status"] = "not-read"
+        # Read the alarm register (0x0C), and verify if the halt update bit (6) is set.									*/
+        elif get_val(ack, 1) == "0C":
+            json_data["word"] = "0C"
+            if get_val(ack, 2) == "sD1":
+                if not get_alarm_register(get_val(ack, 3)) and 0x40:
+                    json_data["status"] = "halt"
+                elif is_nack_stop(ack, 3):
+                    json_data["status"] = "ok"
+                else:
+                    json_data["status"] = "nack-stop"
+            else:
+                json_data["status"] = "not-read"
         else:
-            json_data.append("{{data:{}, status:\'nak\'}}".format(line))
-            print("{} nak".format(line))
-    elif line != "sD0a0CasD1a31np" and len(line) > 0:
-        print("{}, unk".format(line))
-        json_data.append("{{data:{}, status:\'unk\'}}".format(line))
-    else:
-        return False
-    return True
+            json_data["status"] = "word unknow"
+    elif len(ack) > 0:
+        json_data["status"] = "device unknow"
+
+    return json_data
 
 
-def parse_file(filename):
+def parse_raw_file(filename):
     try:
         with open(filename) as f:
             lines = f.readlines()  # list containing lines of file
 
             for line in lines:
-                parse_record(line)
+                data = parse_record(line)
+                show_record(data, line)
+                save_json(args.output, data)
     except FileNotFoundError:
         print("error file not found")
 
@@ -73,7 +129,7 @@ def save_raw(filename, line):
         try:
             with open(filename, "a") as f:
                 f.write(line)
-                f.close
+                f.close()
         except FileNotFoundError:
             print("error can't write raw file")
 
@@ -90,18 +146,25 @@ def parse_serial_com(port, baudrate):
             try:
                 line = device.readline()
                 if line:
-                    if parse_record(line.decode('utf-8')):
-                        save_json(args.output)
-                    save_raw(args.raw_filename, line.decode('utf-8'))
+                    line = line.decode('utf-8')
+                    data = parse_record(line)
+                    save_json(args.output, data)
+                    save_raw(args.raw_filename, line)
+                    show_record(data, line)
             except serial.SerialException as e:
                 print("error reading serial port")
 
 
-def save_json(file_name):
+def save_json(file_name, data):
+    # Successful timer off bit read operations are not saved.
+    if data["word"] == "0C" and data["status"] == "ok":
+        return
+
     try:
         if file_name is not None:
-            with open(file_name, 'w') as outfile:
-                json.dump(json_data, outfile, indent=4)
+            with open(file_name, 'a') as f:
+                f.write("{},\r".format(json.dumps(data)))
+                f.close()
     except FileNotFoundError:
         print("error json file not found")
 
@@ -110,6 +173,4 @@ if __name__ == '__main__':
     if args.port is not None:
         parse_serial_com(args.port, args.baudrate)
     elif args.filename is not None:
-        parse_file(args.filename)
-
-    save_json(args.output)
+        parse_raw_file(args.filename)
