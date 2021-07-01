@@ -17,7 +17,7 @@ import serial
 from datetime import datetime
 
 parser = argparse.ArgumentParser(description="analyzes the I2C bus sniffer output of an RTC M41T81")
-parser.add_argument('--version', action='version', version='%(prog)s 0.1.9')
+parser.add_argument('--version', action='version', version='%(prog)s 0.1.10')
 parser.add_argument("-f", "--filename", required=False, help="input filename, in text format.")
 parser.add_argument("-o", "--output", required=False, help="output filename, in json format (i2c_rtc.json).")
 parser.add_argument("-p", "--port", required=False, help="serial com port (win = COMxxx, linux = ttyXXXX)")
@@ -99,7 +99,7 @@ def show_record(data, line):
     if data["status"] != "empty" and data["status"] != "device unknow":
         line = line.strip()
         if data["word"] == "00":
-            if data["status"] != "ok":
+            if data["status"] == "not-read":
                 print("{} {}".format(line, data["status"]))
             else:
                 print("{}:{}:{}:{} {}/{}/{} {}".format(data["hour"],
